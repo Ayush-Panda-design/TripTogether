@@ -1,0 +1,64 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function isMember(tripId) {
+      return signedIn() && exists(/databases/$(database)/documents/trips/$(tripId)/members/$(request.auth.uid));
+    }
+    function memberRole(tripId) {
+      return get(/databases/$(database)/documents/trips/$(tripId)/members/$(request.auth.uid)).data.role;
+    }
+    function isEditor(tripId) {
+      return isMember(tripId) && memberRole(tripId) in ['owner', 'editor'];
+    }
+    function isOwner(tripId) {
+      return isMember(tripId) && memberRole(tripId) == 'owner';
+    }
+
+    match /users/{uid} {
+      allow read: if signedIn();
+      allow write: if signedIn() && request.auth.uid == uid;
+    }
+
+    match /trips/{tripId} {
+      allow read: if isMember(tripId) || resource.data.visibility == 'public';
+      allow create: if signedIn() && request.resource.data.ownerId == request.auth.uid;
+      allow update: if isEditor(tripId);
+      allow delete: if isOwner(tripId);
+
+      match /members/{uid} {
+        allow read: if isMember(tripId);
+        allow create, update, delete: if isOwner(tripId) || (request.auth.uid == uid && request.resource.data.role == 'viewer');
+      }
+
+      match /itineraryDays/{dayId} {
+        allow read: if isMember(tripId);
+        allow write: if isEditor(tripId);
+
+        match /activities/{actId} {
+          allow read: if isMember(tripId);
+          allow write: if isEditor(tripId);
+        }
+      }
+
+      match /expenses/{id}      { allow read: if isMember(tripId); allow write: if isEditor(tripId); }
+      match /checklists/{id}    { allow read: if isMember(tripId); allow write: if isEditor(tripId);
+        match /items/{itemId}   { allow read: if isMember(tripId); allow write: if isEditor(tripId); }
+      }
+      match /reservations/{id}  { allow read: if isMember(tripId); allow write: if isEditor(tripId); }
+      match /files/{id}         { allow read: if isMember(tripId); allow write: if isEditor(tripId); }
+      match /comments/{id} {
+        allow read: if isMember(tripId);
+        allow create: if isMember(tripId) && request.resource.data.authorId == request.auth.uid;
+        allow update, delete: if signedIn() && resource.data.authorId == request.auth.uid;
+      }
+    }
+
+    match /notifications/{id} {
+      allow read, update: if signedIn() && resource.data.userId == request.auth.uid;
+      allow create: if signedIn();
+      allow delete: if signedIn() && resource.data.userId == request.auth.uid;
+    }
+  }
+}
